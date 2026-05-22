@@ -237,13 +237,20 @@ func (a *Agent) Run(ctx context.Context) ([]model.LlmComment, error) {
 
 	a.currentDate = time.Now().Format("2006-01-02 15:04")
 
-	fmt.Fprintf(stdout.Writer(), "[ocr] Reviewing %d file(s) in %s\n", len(a.diffs), a.args.RepoDir)
+	reviewCount := 0
+	for _, d := range a.diffs {
+		if !d.IsDeleted {
+			reviewCount++
+		}
+	}
+	fmt.Fprintf(stdout.Writer(), "[ocr] %d file(s) changed, reviewing %d in %s\n", len(a.diffs), reviewCount, a.args.RepoDir)
 	telemetry.Event(ctx, "review.started",
 		telemetry.AnyToAttr("file.count", len(a.diffs)),
+		telemetry.AnyToAttr("review.count", reviewCount),
 		telemetry.AnyToAttr("repo.dir", a.args.RepoDir))
 
 	// Record file count metric.
-	telemetry.RecordFilesReviewed(ctx, int64(len(a.diffs)))
+	telemetry.RecordFilesReviewed(ctx, int64(reviewCount))
 
 	// Step 2: Dispatch per-file subtasks concurrently
 	comments, err := a.dispatchSubtasks(ctx)
@@ -369,7 +376,12 @@ func (a *Agent) dispatchSubtasks(ctx context.Context) ([]model.LlmComment, error
 	sem := make(chan struct{}, concurrency)
 	timeout := time.Duration(a.args.ConcurrentTaskTimeout) * time.Minute
 
+	var dispatched int64
 	for i := range a.diffs {
+		if a.diffs[i].IsDeleted {
+			continue
+		}
+		dispatched++
 		wg.Add(1)
 		sem <- struct{}{} // acquire semaphore
 
@@ -398,15 +410,18 @@ func (a *Agent) dispatchSubtasks(ctx context.Context) ([]model.LlmComment, error
 
 	wg.Wait()
 
+	if dispatched == 0 {
+		return []model.LlmComment{}, nil
+	}
+
 	// All subtasks finished — collect comments from the global collector once.
 	if a.args.CommentWorkerPool != nil {
 		a.args.CommentWorkerPool.Await()
 	}
 
 	failed := atomic.LoadInt64(&a.subtaskFailed)
-	total := int64(len(a.diffs))
-	if failed > 0 && failed == total {
-		return nil, fmt.Errorf("all %d file review(s) failed — check your LLM configuration and API key", total)
+	if failed > 0 && failed == dispatched {
+		return nil, fmt.Errorf("all %d file review(s) failed — check your LLM configuration and API key", dispatched)
 	}
 
 	return a.args.CommentCollector.Comments(), nil
