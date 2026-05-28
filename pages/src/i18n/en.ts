@@ -11,7 +11,7 @@ export const en: TranslationKeys = {
   // Hero
   'hero.title': 'AI Code Review',
   'hero.titleHighlight': 'Validated on Millions of Real-World Tasks',
-  'hero.description': 'open-code-review brings Alibaba\'s battle-tested code review Agent into your workflow. Connect any LLM, keep data fully private, and get review comments developers actually adopt.',
+  'hero.description': 'Open Code Review brings Alibaba\'s battle-tested code review Agent into your workflow. Connect any LLM, keep data fully private, and get review comments developers actually adopt.',
   'hero.pill1': 'Adoption Rate > 30%',
   'hero.pill2': 'Data Stays Local',
   'hero.pill3': 'Token Cost Only 1/5',
@@ -24,9 +24,9 @@ export const en: TranslationKeys = {
 
   // Why Section
   'why.sectionLabel': 'Use Cases',
-  'why.title': 'Who Is open-code-review For?',
+  'why.title': 'Who Is Open Code Review For?',
   'why.case1Title': 'Individual Developers',
-  'why.case1Desc': 'Embed open-code-review in your local AI-assisted development workflow for instant, high-quality code review feedback.',
+  'why.case1Desc': 'Embed Open Code Review in your local AI-assisted development workflow for instant, high-quality code review feedback.',
   'why.case2Title': 'Platform Teams',
   'why.case2Desc': 'Seamlessly integrate into your internal systems with full control over data flow and review policies.',
   'why.case3Title': 'ML Researchers',
@@ -52,8 +52,8 @@ export const en: TranslationKeys = {
   // Benchmark Section
   'benchmark.sectionLabel': 'Open Benchmark',
   'benchmark.title': 'Cross-Validated by 80+ Senior Engineers',
-  'benchmark.subtitle': 'A real-world CodeReview benchmark cross-annotated by 80+ senior engineers. open-code-review leads across F1, Precision, and Recall over generic Agent approaches.',
-  'benchmark.legendOcr': 'open-code-review',
+  'benchmark.subtitle': 'A real-world CodeReview benchmark cross-annotated by 80+ senior engineers. Open Code Review leads across F1, Precision, and Recall over generic Agent approaches.',
+  'benchmark.legendOcr': 'Open Code Review',
   'benchmark.legendClaude': 'Claude Code + Skills (Generic)',
   'benchmark.colRank': 'Rank',
   'benchmark.colModel': 'Model',
@@ -77,7 +77,7 @@ export const en: TranslationKeys = {
   'quickstart.step3Title': 'Run Review',
   'quickstart.step3Desc': 'Start your first code review.',
   'quickstart.zeroCfgTitle': 'Already using Claude Code? Zero extra config',
-  'quickstart.zeroCfgDesc': 'If you\'ve already configured Claude Code environment variables (ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL), open-code-review reads them automatically — no additional setup needed.',
+  'quickstart.zeroCfgDesc': 'If you\'ve already configured Claude Code environment variables (ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL), Open Code Review reads them automatically — no additional setup needed.',
   'quickstart.copy': 'Copy',
 
   // Docs Page
@@ -156,7 +156,7 @@ export const en: TranslationKeys = {
   'docs.viewerNote': 'After running, a local HTTP server starts providing a visual interface for browsing review results.',
 
   'docs.envTitle': 'Claude Code Integration',
-  'docs.envDesc': 'If you are already a Claude Code user with the following environment variables configured, <code>open-code-review</code> will recognize them automatically — no extra configuration needed:',
+  'docs.envDesc': 'If you are already a Claude Code user with the following environment variables configured, Open Code Review will recognize them automatically — no extra configuration needed:',
   'docs.envNote': 'You can also use <code>ocr config</code> to override or supplement these settings.',
   'docs.copy': 'Copy',
 
@@ -164,5 +164,5 @@ export const en: TranslationKeys = {
   'quickstart.commentReview': '# Review current changes',
   'quickstart.commentBranch': '# Review diff between branches',
   'quickstart.commentCommit': '# Review a specific commit',
-  'quickstart.commentEnvAuto': '# open-code-review auto-detects these variables',
+  'quickstart.commentEnvAuto': '# Open Code Review auto-detects these variables',
 };

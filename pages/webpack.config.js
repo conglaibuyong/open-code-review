@@ -28,6 +28,10 @@ module.exports = {
       {
         test: /\.css$/,
         use: ['style-loader', 'css-loader', 'postcss-loader']
+      },
+      {
+        test: /\.svg$/,
+        type: 'asset/resource'
       }
     ]
   },
@@ -36,6 +40,7 @@ module.exports = {
   },
   devServer: {
     port: 3030,
+    static: { directory: __dirname },
     historyApiFallback: {
       index: '/index.html',
       rewrites: [{ from: /^\/_p\/\d+\//, to: '/index.html' }]

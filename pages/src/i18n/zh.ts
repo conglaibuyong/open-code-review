@@ -11,7 +11,7 @@ export const zh: TranslationKeys = {
   // Hero
   'hero.title': 'AI 代码评审',
   'hero.titleHighlight': '数百万真实场景任务的验证',
-  'hero.description': 'open-code-review 将阿里巴巴经大规模生产验证的代码评审 Agent 带入你的工作流。接入任意 LLM，数据完全私有，获得开发者真正愿意采纳的评审意见。',
+  'hero.description': 'Open Code Review 将阿里巴巴经大规模生产验证的代码评审 Agent 带入你的工作流。接入任意 LLM，数据完全私有，获得开发者真正愿意采纳的评审意见。',
   'hero.pill1': '采纳率 > 30%',
   'hero.pill2': '数据本地闭环',
   'hero.pill3': 'Token 消耗仅 1/5',
@@ -24,9 +24,9 @@ export const zh: TranslationKeys = {
 
   // Why Section
   'why.sectionLabel': '适用场景',
-  'why.title': 'open-code-review 适合谁？',
+  'why.title': 'Open Code Review 适合谁？',
   'why.case1Title': '个人开发者',
-  'why.case1Desc': '将 open-code-review 嵌入本地 AI 辅助研发工作流，获得即时、高质量的代码评审反馈。',
+  'why.case1Desc': '将 Open Code Review 嵌入本地 AI 辅助研发工作流，获得即时、高质量的代码评审反馈。',
   'why.case2Title': '平台团队',
   'why.case2Desc': '无缝集成至您的内部系统，完全掌控数据流向与评审策略。',
   'why.case3Title': '模型训练研究者',
@@ -52,8 +52,8 @@ export const zh: TranslationKeys = {
   // Benchmark Section
   'benchmark.sectionLabel': '开放基准测试',
   'benchmark.title': '80+ 位资深工程师交叉标注验证',
-  'benchmark.subtitle': '基于真实场景的 CodeReview 基准测试，由 80+ 位资深工程师交叉标注。open-code-review 在 F1、精确率、召回率上全面领先通用 Agent 方案。',
-  'benchmark.legendOcr': 'open-code-review',
+  'benchmark.subtitle': '基于真实场景的 CodeReview 基准测试，由 80+ 位资深工程师交叉标注。Open Code Review 在 F1、精确率、召回率上全面领先通用 Agent 方案。',
+  'benchmark.legendOcr': 'Open Code Review',
   'benchmark.legendClaude': 'Claude Code + Skills（通用方案）',
   'benchmark.colRank': '排名',
   'benchmark.colModel': '模型',
@@ -77,7 +77,7 @@ export const zh: TranslationKeys = {
   'quickstart.step3Title': '运行评审',
   'quickstart.step3Desc': '开始你的第一次代码评审。',
   'quickstart.zeroCfgTitle': '已在使用 Claude Code？零额外配置',
-  'quickstart.zeroCfgDesc': '如果你已经配置了 Claude Code 的环境变量（ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL），open-code-review 会自动读取这些配置，无需任何额外设置即可直接使用。',
+  'quickstart.zeroCfgDesc': '如果你已经配置了 Claude Code 的环境变量（ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL），Open Code Review 会自动读取这些配置，无需任何额外设置即可直接使用。',
   'quickstart.copy': '复制',
 
   // Docs Page
@@ -156,7 +156,7 @@ export const zh: TranslationKeys = {
   'docs.viewerNote': '运行后会在本地启动一个 HTTP 服务器，提供可视化的评审结果浏览界面。',
 
   'docs.envTitle': '适配 Claude Code',
-  'docs.envDesc': '如果你已经是 Claude Code 用户并配置了以下环境变量，<code>open-code-review</code> 会自动识别，无需任何额外配置：',
+  'docs.envDesc': '如果你已经是 Claude Code 用户并配置了以下环境变量，Open Code Review 会自动识别，无需任何额外配置：',
   'docs.envNote': '此外，工具也支持通过 <code>ocr config</code> 命令来覆盖或补充这些配置。',
   'docs.copy': '复制',
 
@@ -164,5 +164,5 @@ export const zh: TranslationKeys = {
   'quickstart.commentReview': '# 评审当前变更',
   'quickstart.commentBranch': '# 评审分支间的差异',
   'quickstart.commentCommit': '# 评审指定提交',
-  'quickstart.commentEnvAuto': '# open-code-review 自动识别这些变量',
+  'quickstart.commentEnvAuto': '# Open Code Review 自动识别这些变量',
 };

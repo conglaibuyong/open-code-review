@@ -38,6 +38,7 @@ jobs:
         run: |
           mkdir -p _site
           cp -r pages/dist/* _site/
+          cp pages/logo.svg _site/logo.svg
 
       - uses: actions/upload-pages-artifact@v3
         with:

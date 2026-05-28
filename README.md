@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://github.com/alibaba/open-code-review">
+  <a href="https://alibaba.github.io/open-code-review/">
     <img src="imgs/logo.svg" alt="OpenCodeReview logo" width="240" height="240">
   </a>
 </p>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from '../i18n';
+import logoSvg from '../../logo.svg';
 
 const Navbar: React.FC = () => {
   const [isScrolled, setIsScrolled] = useState(false);
@@ -52,11 +53,9 @@ const Navbar: React.FC = () => {
 
       <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
         <Link to="/" className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-400 to-green-600 flex items-center justify-center glow-green-sm">
-            <i className="fa-solid fa-eye text-dark-900 text-sm"></i>
-          </div>
+          <img src={logoSvg} alt="OpenCodeReview" className="w-8 h-8 rounded-lg" />
           <span className="font-bold text-lg tracking-tight">
-            <span className="text-white">open-code-review</span>
+            <span className="text-white">Open Code Review</span>
           </span>
         </Link>
 

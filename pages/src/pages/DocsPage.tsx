@@ -180,7 +180,7 @@ const DocsPage: React.FC = () => {
           {/* Overview */}
           <DocSection id="overview" title={t('docs.overviewTitle')}>
             <p className="text-slate-300 leading-relaxed mb-4">
-              <code className="text-brand-400 bg-dark-800/50 px-1.5 py-0.5 rounded text-sm font-mono">open-code-review</code>{' '}
+              <code className="text-brand-400 bg-dark-800/50 px-1.5 py-0.5 rounded text-sm font-mono">Open Code Review</code>{' '}
               <span dangerouslySetInnerHTML={{ __html: t('docs.overviewDesc') }} />
             </p>
             <div className="glass rounded-xl p-5 mb-6">
