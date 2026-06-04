@@ -1,4 +1,4 @@
-.PHONY: build test clean run help \
+.PHONY: build test clean run help fmt vet check \
 	build-all dist sha256sum version-info \
 	build-linux-amd64 build-linux-arm64 build-darwin-amd64 build-darwin-arm64 \
 	build-windows-amd64 build-windows-arm64
@@ -40,6 +40,15 @@ run: build
 
 help: build
 	$(DIST_DIR)/$(BINARY_NAME) -h
+
+fmt:
+	$(GO) fmt ./...
+
+vet:
+	$(GO) vet ./...
+
+check: fmt vet
+	@echo "check passed"
 
 # ── Cross-platform targets ───────────────────────────────────────────────────
 build-linux-amd64:
