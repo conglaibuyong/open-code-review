@@ -117,21 +117,27 @@ sudo cp dist/opencodereview /usr/local/bin/ocr
 # Option A: Interactive config
 ocr config set llm.url https://api.anthropic.com/v1/messages
 ocr config set llm.auth_token your-api-key-here
-ocr config set llm.auth_header x-api-key
 ocr config set llm.model claude-opus-4-6
 ocr config set llm.use_anthropic true
 
 # Option B: Environment variables (highest priority)
 export OCR_LLM_URL=https://api.anthropic.com/v1/messages
 export OCR_LLM_TOKEN=your-api-key-here
-export OCR_LLM_AUTH_HEADER=x-api-key
 export OCR_LLM_MODEL=claude-opus-4-6
 export OCR_USE_ANTHROPIC=true
 ```
 
 Config is stored in `~/.opencodereview/config.json`.
 
-For Anthropic, standard `sk-ant-*` API keys use `x-api-key`; OAuth tokens use `authorization`. If `llm.auth_header` / `OCR_LLM_AUTH_HEADER` is omitted, OCR keeps the existing `authorization` bearer-token behavior.
+**`auth_header` (optional):** Controls which HTTP header carries the API key when using Anthropic. Defaults to `authorization` (Bearer token) if omitted. If you use a standard `sk-ant-*` API key, you must set it to `x-api-key`:
+
+```bash
+ocr config set llm.auth_header x-api-key
+# or
+export OCR_LLM_AUTH_HEADER=x-api-key
+```
+
+Supported values: `x-api-key`, `authorization` (alias: `bearer`). Other values are rejected with an error.
 
 It is also compatible with Claude Code environment variables (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`) and parses `~/.zshrc` / `~/.bashrc` for those exports.
 

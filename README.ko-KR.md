@@ -117,21 +117,27 @@ sudo cp dist/opencodereview /usr/local/bin/ocr
 # Option A: 대화형 config
 ocr config set llm.url https://api.anthropic.com/v1/messages
 ocr config set llm.auth_token your-api-key-here
-ocr config set llm.auth_header x-api-key
 ocr config set llm.model claude-opus-4-6
 ocr config set llm.use_anthropic true
 
 # Option B: 환경 변수(가장 높은 우선순위)
 export OCR_LLM_URL=https://api.anthropic.com/v1/messages
 export OCR_LLM_TOKEN=your-api-key-here
-export OCR_LLM_AUTH_HEADER=x-api-key
 export OCR_LLM_MODEL=claude-opus-4-6
 export OCR_USE_ANTHROPIC=true
 ```
 
 config는 `~/.opencodereview/config.json`에 저장됩니다.
 
-Anthropic에서는 표준 `sk-ant-*` API key는 `x-api-key`를 사용하고, OAuth token은 `authorization`을 사용합니다. `llm.auth_header` / `OCR_LLM_AUTH_HEADER`를 생략하면 OCR은 기존 `authorization` bearer-token 동작을 유지합니다.
+**`auth_header` (선택사항):** Anthropic 사용 시 API key를 전송할 HTTP header를 제어합니다. 생략하면 기본값은 `authorization` (Bearer token)입니다. 표준 `sk-ant-*` API key를 사용하는 경우 `x-api-key`로 설정해야 합니다:
+
+```bash
+ocr config set llm.auth_header x-api-key
+# 또는
+export OCR_LLM_AUTH_HEADER=x-api-key
+```
+
+지원되는 값: `x-api-key`, `authorization` (별칭: `bearer`). 그 외 값은 오류로 처리됩니다.
 
 Claude Code 환경 변수(`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`)와도 호환되며, `~/.zshrc` / `~/.bashrc`의 export도 파싱합니다.
 
