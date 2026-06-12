@@ -18,10 +18,14 @@ type TFVCProvider struct {
 }
 
 // NewTFVCProvider creates a TFVCProvider.
-// If tfPath is empty, it defaults to "tf" (assumes tf is on PATH).
+// If tfPath is empty, it auto-discovers the tf command location
+// by checking PATH and common Visual Studio installation paths.
 func NewTFVCProvider(tfPath string) *TFVCProvider {
 	if tfPath == "" {
-		tfPath = "tf"
+		tfPath = findTFCommand()
+	}
+	if tfPath == "" {
+		tfPath = "tf" // fallback, will fail at runtime with a clear error
 	}
 	return &TFVCProvider{tfPath: tfPath}
 }
@@ -31,6 +35,8 @@ func (t *TFVCProvider) Name() Backend { return TFVC }
 func (t *TFVCProvider) IgnoreFile() string { return ".tfignore" }
 
 // Detect checks whether the given directory belongs to a TFVC workspace.
+// Supports both local workspaces (with $tf directory) and server workspaces
+// (detected via `tf workfold`).
 func (t *TFVCProvider) Detect(repoDir string) bool {
 	return isTFVCWorkspace(repoDir)
 }
@@ -43,7 +49,7 @@ func (t *TFVCProvider) ResolveRepoDir(dir string) (string, error) {
 	}
 
 	if !t.Detect(absPath) {
-		return "", fmt.Errorf("%s is not a TFVC workspace", absPath)
+		return "", fmt.Errorf("%s is not a TFVC workspace (checked for $tf directory and tf workfold mapping)", absPath)
 	}
 	return absPath, nil
 }
@@ -82,15 +88,28 @@ func (t *TFVCProvider) getWorkspaceDiff(ctx context.Context, opts DiffOptions) (
 		}
 	}
 
-	// Also get pending adds (new files) that tf diff may not include
-	adds, err := t.getPendingAdds(ctx, opts.RepoDir)
-	if err == nil && adds != "" {
-		out += "\n" + adds
-	}
+	// Get server mapping for accurate path conversion
+	serverPath, _ := t.getServerPath(opts.RepoDir)
 
 	// Convert TFVC diff format to Git-compatible unified diff format
 	adapter := NewTFVCDiffAdapter(opts.RepoDir)
-	return adapter.ConvertToGitDiff(out)
+	if serverPath != "" {
+		adapter.SetServerMapping(serverPath, opts.RepoDir)
+	}
+	result, convErr := adapter.ConvertToGitDiff(out)
+	if convErr != nil {
+		return "", convErr
+	}
+
+	// Also get pending adds (new files) that tf diff may not include.
+	// These are already in Git-compatible diff format (from formatNewFileDiff),
+	// so we append them directly without converting through the adapter.
+	adds, err := t.getPendingAdds(ctx, opts.RepoDir)
+	if err == nil && adds != "" {
+		result += "\n" + adds
+	}
+
+	return result, nil
 }
 
 // getChangesetDiff gets diff for a specific changeset.
@@ -308,9 +327,12 @@ func (t *TFVCProvider) localToServerPath(repoDir string, localPath string) (stri
 }
 
 // runTF executes a tf command and returns the combined output as a string.
+// It sets MSYS_NO_PATHCONV=1 to prevent Git Bash from converting /flags to paths.
 func (t *TFVCProvider) runTF(ctx context.Context, repoDir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, t.tfPath, args...)
 	cmd.Dir = repoDir
+	// Prevent Git Bash (MSYS) from converting /flags like /recursive to Windows paths
+	cmd.Env = append(os.Environ(), "MSYS_NO_PATHCONV=1")
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -319,6 +341,7 @@ func (t *TFVCProvider) runTF(ctx context.Context, repoDir string, args ...string
 func (t *TFVCProvider) runTFBytes(ctx context.Context, repoDir string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, t.tfPath, args...)
 	cmd.Dir = repoDir
+	cmd.Env = append(os.Environ(), "MSYS_NO_PATHCONV=1")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -377,6 +400,38 @@ func extractLocalPath(line string, repoDir string) string {
 		}
 	}
 	return ""
+}
+
+// getServerPath uses `tf workfold` to determine the server path mapping
+// for the given local directory. Returns the server path (e.g., "$/Project/Branch").
+func (t *TFVCProvider) getServerPath(repoDir string) (string, error) {
+	ctx := context.Background()
+	args := []string{"workfold", repoDir}
+	out, err := t.runTF(ctx, repoDir, args...)
+	if err != nil {
+		return "", fmt.Errorf("tf workfold failed: %w", err)
+	}
+
+	// Parse the workfold output to find the server path
+	// Format varies by locale, e.g.:
+	// English: "Workspace: ws-name (Owner)"
+	//          "Collection: https://server/tfs/collection"
+	//          "$/Project/Branch: D:\local\path"
+	// Chinese: "工作区: ws-name (Owner)"
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		// Look for lines containing server paths ($/)
+		if idx := strings.Index(line, "$/"); idx >= 0 {
+			serverPath := line[idx:]
+			// Strip the colon and local path after it
+			if colonIdx := strings.Index(serverPath, ":"); colonIdx >= 0 {
+				serverPath = serverPath[:colonIdx]
+			}
+			return strings.TrimSpace(serverPath), nil
+		}
+	}
+
+	return "", fmt.Errorf("could not determine server path from tf workfold output")
 }
 
 // changesetPattern matches changeset references like "C12345" or "12345".

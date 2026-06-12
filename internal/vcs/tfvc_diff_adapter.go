@@ -7,136 +7,206 @@ import (
 )
 
 // TFVCDiffAdapter converts TFVC unified diff output to Git-compatible unified diff format.
-// TFVC's `tf diff /format:unified` output differs from `git diff` in several ways:
-//   - File headers use server paths (e.g., "$/Project/file.cs") instead of "a/file" / "b/file"
-//   - Missing "diff --git a/... b/..." header lines
-//   - Different binary file markers
-//   - Possible differences in hunk headers
 type TFVCDiffAdapter struct {
-	repoDir string
+	repoDir     string
+	serverPath  string
+	workspaceID string
 }
 
 // NewTFVCDiffAdapter creates a new adapter for converting TFVC diffs.
 func NewTFVCDiffAdapter(repoDir string) *TFVCDiffAdapter {
-	return &TFVCDiffAdapter{repoDir}
+	return &TFVCDiffAdapter{repoDir: repoDir}
+}
+
+// SetServerMapping configures the server-to-local path mapping.
+func (a *TFVCDiffAdapter) SetServerMapping(serverPath, localBase string) {
+	a.serverPath = strings.TrimSuffix(serverPath, "/")
+	a.workspaceID = localBase
 }
 
 var (
-	// tfvcFileHeader matches TFVC unified diff file headers like:
-	// --- $/Project/Branch/file.cs;C12345  or  --- file.cs
-	tfvcOldFileRe = regexp.MustCompile(`^--- (.+?)(?:\s*;.*)?$`)
-	// +++ $/Project/Branch/file.cs;C12345  or  +++ file.cs
-	tfvcNewFileRe = regexp.MustCompile(`^\+\+\+ (.+?)(?:\s*;.*)?$`)
-	// TFVC binary file marker
-	tfvcBinaryRe = regexp.MustCompile(`^Binary files .* differ$`)
-	// TFVC diff section header (different from "diff --git")
-	tfvcDiffSectionRe = regexp.MustCompile(`^Index:\s+(.+)$`)
-	// TFVC "===" separator
-	tfvcEqualsRe = regexp.MustCompile(`^={10,}$`)
-	// Hunk header
+	// Server path pattern: $/ followed by path segments
+	serverPathInHeader = regexp.MustCompile(`\$/[^\s;]+`)
+	// Version suffix pattern: ;C12345 or ;12345
+	versionSuffix = regexp.MustCompile(`;[Cc]?\d+$`)
+	// Hunk header: @@ -1,3 +1,4 @@
 	hunkHeaderRe = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
+	// Equals separator line (10 or more = signs)
+	tfvcEqualsRe = regexp.MustCompile(`^={10,}$`)
+	// Binary file marker
+	tfvcBinaryRe = regexp.MustCompile(`(?i)^binary files .* differ$`)
 )
 
 // ConvertToGitDiff transforms TFVC unified diff output to Git-compatible format.
-// The output is compatible with the existing ParseDiffText() parser in internal/diff.
 func (a *TFVCDiffAdapter) ConvertToGitDiff(tfvcDiff string) (string, error) {
 	if strings.TrimSpace(tfvcDiff) == "" {
 		return "", nil
 	}
 
-	lines := strings.Split(tfvcDiff, "\n")
+	// Normalize line endings
+	normalized := strings.ReplaceAll(tfvcDiff, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "")
+
+	lines := strings.Split(normalized, "\n")
 	var result strings.Builder
 	var currentFile string
-	var inHunk bool
 
-	for i := 0; i < len(lines); i++ {
-		line := lines[i]
-
-		// Check for TFVC diff section header: "Index: <path>"
-		if m := tfvcDiffSectionRe.FindStringSubmatch(line); m != nil {
-			currentFile = a.serverPathToLocal(m[1])
-			inHunk = false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
 			continue
 		}
 
 		// Skip TFVC "========" separator lines
-		if tfvcEqualsRe.MatchString(line) {
+		if tfvcEqualsRe.MatchString(trimmed) {
 			continue
 		}
 
-		// Check for "---" old file header
-		if m := tfvcOldFileRe.FindStringSubmatch(line); m != nil {
-			if currentFile == "" {
-				currentFile = a.serverPathToLocal(m[1])
-			}
-			// Write Git-compatible header
+		// --- header line
+		if strings.HasPrefix(trimmed, "--- ") {
+			currentFile = a.extractPathFromOldHeader(trimmed)
 			result.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", currentFile, currentFile))
 			result.WriteString(fmt.Sprintf("--- a/%s\n", currentFile))
 			continue
 		}
 
-		// Check for "+++" new file header
-		if m := tfvcNewFileRe.FindStringSubmatch(line); m != nil {
+		// +++ header line
+		if strings.HasPrefix(trimmed, "+++ ") {
 			if currentFile == "" {
-				currentFile = a.serverPathToLocal(m[1])
+				currentFile = a.extractPathFromNewHeader(trimmed)
 			}
-			// Check if this is a new file (old was /dev/null)
 			result.WriteString(fmt.Sprintf("+++ b/%s\n", currentFile))
 			continue
 		}
 
-		// Check for binary file markers
-		if tfvcBinaryRe.MatchString(line) {
+		// Hunk header
+		if hunkHeaderRe.MatchString(trimmed) {
+			if currentFile == "" {
+				continue // skip orphan hunks
+			}
+			result.WriteString(trimmed)
+			result.WriteString("\n")
+			continue
+		}
+
+		// Binary file marker
+		if tfvcBinaryRe.MatchString(trimmed) {
 			if currentFile == "" {
 				currentFile = "unknown"
 			}
 			result.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", currentFile, currentFile))
 			result.WriteString("Binary files differ\n")
-			inHunk = false
+			currentFile = "" // reset for next file
 			continue
 		}
 
-		// Check for hunk header
-		if hunkHeaderRe.MatchString(line) {
-			inHunk = true
-			result.WriteString(line)
+		// Diff content lines (added, deleted, context)
+		if len(trimmed) > 0 && (trimmed[0] == '+' || trimmed[0] == '-' || trimmed[0] == ' ') {
+			if currentFile == "" {
+				continue // skip orphan lines
+			}
+			result.WriteString(trimmed)
 			result.WriteString("\n")
 			continue
 		}
 
-		// Pass through all other lines (context, added, deleted)
-		if inHunk || strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") || strings.HasPrefix(line, " ") {
-			result.WriteString(line)
-			result.WriteString("\n")
-		}
+		// Everything else (edit/file labels, etc.) — skip and reset currentFile
+		// unless we're already in a hunk (context lines start with space)
+		currentFile = ""
 	}
 
 	return result.String(), nil
 }
 
+// extractPathFromOldHeader extracts the file path from a TFVC "---" diff header.
+// Format examples:
+//   "--- $/DP-Teld/MPM/Main/02-Backend/BBC/TeldBOM_BBC/NuGet.Config;C66981"
+//   "--- 服务器: $/DP-Teld/MPM/Main/02-Backend/BBC/TeldBOM_BBC/NuGet.Config;C66981"
+// Strategy: find the $/...; pattern which is the server path, convert to local.
+func (a *TFVCDiffAdapter) extractPathFromOldHeader(line string) string {
+	// Look for server path ($/...) — this is the most reliable indicator
+	if m := serverPathInHeader.FindString(line); m != "" {
+		// Remove version suffix
+		path := versionSuffix.ReplaceAllString(m, "")
+		return a.serverPathToLocal(path)
+	}
+
+	// Fallback: extract content after "--- " and try to get a path
+	content := strings.TrimPrefix(line, "--- ")
+	content = strings.TrimSpace(content)
+	content = versionSuffix.ReplaceAllString(content, "")
+	return a.normalizePath(content)
+}
+
+// extractPathFromNewHeader extracts the file path from a TFVC "+++" diff header.
+// Format examples:
+//   "+++ NuGet.Config"
+//   "+++ 本地: NuGet.Config"
+//   "+++ Teld.Bom.BBC.Repository\Common\BackUpMasterRepository.cs"
+// Strategy: take the last whitespace-separated token that looks like a path.
+func (a *TFVCDiffAdapter) extractPathFromNewHeader(line string) string {
+	content := strings.TrimPrefix(line, "+++ ")
+	content = strings.TrimSpace(content)
+	content = versionSuffix.ReplaceAllString(content, "")
+
+	// If content starts with $/, it's a server path
+	if strings.HasPrefix(content, "$/") {
+		return a.serverPathToLocal(content)
+	}
+
+	// The path is typically the last token in the line
+	// Split by whitespace and take the last token that looks like a path
+	tokens := strings.Fields(content)
+	if len(tokens) == 0 {
+		return content
+	}
+
+	// Take the last token — it's usually the filename/path
+	last := tokens[len(tokens)-1]
+	return a.normalizePath(last)
+}
+
 // serverPathToLocal converts a TFVC server path to a local relative path.
-// E.g., "$/Project/Branch/src/file.cs" → "src/file.cs"
 func (a *TFVCDiffAdapter) serverPathToLocal(serverPath string) string {
-	// Strip the $/ prefix
 	path := strings.TrimPrefix(serverPath, "$/")
 
-	// If the path contains a semicolon (version spec), strip it
 	if idx := strings.Index(path, ";"); idx >= 0 {
 		path = path[:idx]
 	}
 
-	// Try to strip the project/branch prefix.
-	// This is a best-effort heuristic; in production, you'd use
-	// `tf workfold` to determine the exact mapping.
-	// For now, we assume the path after the first two segments is the relative path.
+	if a.serverPath != "" {
+		prefix := strings.TrimPrefix(a.serverPath, "$/") + "/"
+		if strings.HasPrefix(path, prefix) {
+			return strings.ReplaceAll(strings.TrimPrefix(path, prefix), "\\", "/")
+		}
+	}
+
+	// Fallback: strip first two segments (project/branch)
 	segments := strings.Split(path, "/")
 	if len(segments) > 2 {
-		// Strip "$/Project/Branch/" prefix, keep the rest
 		path = strings.Join(segments[2:], "/")
 	}
 
-	// Normalize backslashes to forward slashes
-	path = strings.ReplaceAll(path, "\\", "/")
+	return strings.ReplaceAll(path, "\\", "/")
+}
 
+// localPathToRelative converts a full local path to a relative path.
+func (a *TFVCDiffAdapter) localPathToRelative(localPath string) string {
+	path := strings.ReplaceAll(strings.TrimSpace(localPath), "\\", "/")
+	repoDir := strings.ReplaceAll(a.repoDir, "\\", "/")
+
+	if strings.HasPrefix(path, repoDir+"/") {
+		return strings.TrimPrefix(path, repoDir+"/")
+	}
+	if strings.HasPrefix(path, repoDir) {
+		return strings.TrimPrefix(path, repoDir)
+	}
+	return path
+}
+
+// normalizePath normalizes a path (backslashes → forward slashes, trim).
+func (a *TFVCDiffAdapter) normalizePath(path string) string {
+	path = strings.TrimSpace(path)
+	path = strings.ReplaceAll(path, "\\", "/")
 	return path
 }

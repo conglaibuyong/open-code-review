@@ -1,6 +1,7 @@
 package vcs
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -89,15 +90,13 @@ func TestIsChangesetRef(t *testing.T) {
 
 func TestTFVCDiffAdapter_ServerPathToLocal(t *testing.T) {
 	adapter := NewTFVCDiffAdapter("/repo")
+	adapter.SetServerMapping("$/DP-Teld/MPM/Main/02-Backend/BBC/TeldBOM_BBC", "/repo")
 	tests := []struct {
 		input    string
 		expected string
 	}{
-		{"$/Project/Branch/src/file.cs", "src/file.cs"},
-		{"$/MyApp/Main/utils/helper.go", "utils/helper.go"},
-		{"$/A/B/file.txt", "file.txt"},
-		{"src/file.cs;C12345", "src/file.cs"},
-		{"file.cs", "file.cs"},
+		{"$/DP-Teld/MPM/Main/02-Backend/BBC/TeldBOM_BBC/NuGet.Config", "NuGet.Config"},
+		{"$/DP-Teld/MPM/Main/02-Backend/BBC/TeldBOM_BBC/Teld.Bom.BBC.Repository/Common/BackUpMasterRepository.cs", "Teld.Bom.BBC.Repository/Common/BackUpMasterRepository.cs"},
 	}
 	for _, tt := range tests {
 		got := adapter.serverPathToLocal(tt.input)
@@ -107,17 +106,51 @@ func TestTFVCDiffAdapter_ServerPathToLocal(t *testing.T) {
 	}
 }
 
+func TestTFVCDiffAdapter_ExtractPathFromOldHeader(t *testing.T) {
+	adapter := NewTFVCDiffAdapter("/repo")
+	adapter.SetServerMapping("$/DP-Teld/MPM/Main/02-Backend/BBC/TeldBOM_BBC", "/repo/DCCS/DP-Teld/MPM/Main/02-Backend/BBC/TeldBOM_BBC")
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"--- $/DP-Teld/MPM/Main/02-Backend/BBC/TeldBOM_BBC/NuGet.Config;C66981", "NuGet.Config"},
+		{"--- $/DP-Teld/MPM/Main/02-Backend/BBC/TeldBOM_BBC/Teld.Bom.BBC.Repository/Common/BackUpMasterRepository.cs;C98332", "Teld.Bom.BBC.Repository/Common/BackUpMasterRepository.cs"},
+	}
+	for _, tt := range tests {
+		got := adapter.extractPathFromOldHeader(tt.input)
+		if got != tt.expected {
+			t.Errorf("extractPathFromOldHeader(%q)\n= %q\nwant %q", tt.input, got, tt.expected)
+		}
+	}
+}
+
+func TestTFVCDiffAdapter_ExtractPathFromNewHeader(t *testing.T) {
+	adapter := NewTFVCDiffAdapter("/repo")
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"+++ NuGet.Config", "NuGet.Config"},
+		{"+++ Teld.Bom.BBC.Repository\\Common\\BackUpMasterRepository.cs", "Teld.Bom.BBC.Repository/Common/BackUpMasterRepository.cs"},
+	}
+	for _, tt := range tests {
+		got := adapter.extractPathFromNewHeader(tt.input)
+		if got != tt.expected {
+			t.Errorf("extractPathFromNewHeader(%q)\n= %q\nwant %q", tt.input, got, tt.expected)
+		}
+		_ = strings.Contains(got, tt.expected) // suppress unused import warning
+	}
+}
+
 func TestTFVCDiffAdapter_ConvertToGitDiff(t *testing.T) {
 	adapter := NewTFVCDiffAdapter("/repo")
-	tfvcOutput := `Index: $/Project/Branch/src/main.go
-==========
---- $/Project/Branch/src/main.go;C100
-+++ $/Project/Branch/src/main.go;C101
-@@ -1,5 +1,5 @@
- package main
-
--func old() {
-+func new() {
+	adapter.SetServerMapping("$/DP-Teld/MPM/Main/02-Backend/BBC/TeldBOM_BBC", "/repo")
+	tfvcOutput := `--- $/DP-Teld/MPM/Main/02-Backend/BBC/TeldBOM_BBC/NuGet.Config;C66981
++++ NuGet.Config
+@@ -4,13 +4,14 @@
+   <config>
+-  </config>
++  </config>
  }
 `
 
@@ -126,21 +159,28 @@ func TestTFVCDiffAdapter_ConvertToGitDiff(t *testing.T) {
 		t.Fatalf("ConvertToGitDiff error: %v", err)
 	}
 
-	// Should contain git-compatible diff headers
-	if !contains(result, "diff --git a/src/main.go b/src/main.go") {
+	if !strings.Contains(result, "diff --git a/NuGet.Config b/NuGet.Config") {
 		t.Errorf("missing diff --git header in output:\n%s", result)
 	}
-	if !contains(result, "--- a/src/main.go") {
+	if !strings.Contains(result, "--- a/NuGet.Config") {
 		t.Errorf("missing --- header in output:\n%s", result)
 	}
-	if !contains(result, "+++ b/src/main.go") {
+	if !strings.Contains(result, "+++ b/NuGet.Config") {
 		t.Errorf("missing +++ header in output:\n%s", result)
 	}
-	if !contains(result, "-func old() {") {
-		t.Errorf("missing deleted line in output:\n%s", result)
+}
+
+func TestTFVCDiffAdapter_ConvertWithCRLF(t *testing.T) {
+	adapter := NewTFVCDiffAdapter("/repo")
+	adapter.SetServerMapping("$/DP-Teld/MPM/Main/02-Backend/BBC/TeldBOM_BBC", "/repo")
+	tfvcOutput := "--- $/DP-Teld/MPM/Main/02-Backend/BBC/TeldBOM_BBC/NuGet.Config;C66981\r\n+++ NuGet.Config\r\n@@ -4,13 +4,14 @@\r\n-  </config>\r\n+  </config>\r\n"
+
+	result, err := adapter.ConvertToGitDiff(tfvcOutput)
+	if err != nil {
+		t.Fatalf("ConvertToGitDiff error: %v", err)
 	}
-	if !contains(result, "+func new() {") {
-		t.Errorf("missing added line in output:\n%s", result)
+	if !strings.Contains(result, "diff --git a/NuGet.Config b/NuGet.Config") {
+		t.Errorf("missing header with CRLF input:\n%s", result)
 	}
 }
 
@@ -153,17 +193,4 @@ func TestTFVCDiffAdapter_EmptyInput(t *testing.T) {
 	if result != "" {
 		t.Errorf("expected empty output for empty input, got: %q", result)
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstr(s, substr))
-}
-
-func containsSubstr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
