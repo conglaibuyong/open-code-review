@@ -101,6 +101,8 @@ type reviewOptions struct {
 	from           string
 	to             string
 	commit         string
+	vcs            string // --vcs: "auto", "git", or "tfvc"
+	shelveset      string // --shelveset: TFVC shelveset name
 	outputFormat   string
 	audience       string // --audience: "human" (default) or "agent"
 	background     string // --background: optional requirement context
@@ -119,10 +121,12 @@ func parseReviewFlags(args []string) (reviewOptions, error) {
 
 	a.StringVar(&opts.toolConfigPath, "tools", "", "path to JSON tools config file (default: embedded)")
 	a.StringVar(&opts.rulePath, "rule", "", "path to JSON file with system review rules")
-	a.StringVar(&opts.repoDir, "repo", "", "root directory of the git repository (default: current dir)")
-	a.StringVar(&opts.from, "from", "", "source ref to start diff from (e.g., 'main')")
-	a.StringVar(&opts.to, "to", "", "target ref to end diff at (e.g., 'feature-branch')")
-	a.StringVarP(&opts.commit, "commit", "c", "", "single commit hash or tag to review (vs its parent)")
+	a.StringVar(&opts.repoDir, "repo", "", "root directory of the repository (default: current dir)")
+	a.StringVar(&opts.from, "from", "", "source ref to start diff from (e.g., 'main' or 'C12345')")
+	a.StringVar(&opts.to, "to", "", "target ref to end diff at (e.g., 'feature-branch' or 'C12350')")
+	a.StringVarP(&opts.commit, "commit", "c", "", "single commit hash/changeset to review (vs its parent)")
+	a.StringVar(&opts.vcs, "vcs", "auto", "version control system: auto, git, or tfvc")
+	a.StringVarP(&opts.shelveset, "shelveset", "s", "", "TFVC shelveset name to review")
 	a.StringVarP(&opts.outputFormat, "format", "f", "text", "output format: text or json")
 	a.IntVar(&opts.concurrency, "concurrency", 8, "max concurrent file reviews")
 	a.IntVar(&opts.perFileTimeout, "timeout", 10, "concurrent task timeout in minutes")
@@ -148,12 +152,22 @@ func parseReviewFlags(args []string) (reviewOptions, error) {
 	if opts.commit != "" {
 		modeCount++
 	}
+	if opts.shelveset != "" {
+		modeCount++
+	}
 	// modeCount == 0 → workspace mode (no error, allowed)
 	if modeCount > 1 {
-		return opts, fmt.Errorf("only one review mode allowed (--from/--to or --commit)")
+		return opts, fmt.Errorf("only one review mode allowed (--from/--to, --commit, or --shelveset)")
 	}
 	if opts.from != "" && opts.to == "" {
 		return opts, fmt.Errorf("--to is required when --from is specified")
+	}
+
+	// Validate --vcs flag
+	switch opts.vcs {
+	case "auto", "git", "tfvc":
+	default:
+		return opts, fmt.Errorf("invalid --vcs value %q: must be 'auto', 'git', or 'tfvc'", opts.vcs)
 	}
 
 	switch opts.audience {
@@ -196,6 +210,15 @@ Examples:
   ocr review --commit abc123
   ocr review -c abc123
 
+  # Review a TFVC workspace (pending changes)
+  ocr review --vcs tfvc
+
+  # Review a TFVC changeset
+  ocr review --vcs tfvc --commit C12345
+
+  # Review a TFVC shelveset
+  ocr review --vcs tfvc --shelveset my-feature
+
   # Output JSON format
   ocr review --format json
   ocr review -f json
@@ -210,18 +233,20 @@ Examples:
 Flags:
   --audience string       output audience: human (show progress) or agent (summary only) (default "human")
   -b, --background string optional requirement/business context for the review
-  -c, --commit string     single commit hash or tag to review (vs its parent)
+  -c, --commit string     single commit hash/changeset to review (vs its parent)
   -f, --format string     output format: text or json (default "text")
   --concurrency int       max concurrent file reviews (default 8)
   --max-git-procs int     max concurrent git subprocesses (default 16)
-  --from string           source ref to start diff from (e.g., 'main')
+  --from string           source ref to start diff from (e.g., 'main' or 'C12345')
   --max-tools int         max tool call rounds per file (0 = template default; min 10)
   -p, --preview           preview which files will be reviewed without running the LLM
-  --repo string           root directory of the git repository (default: current dir)
+  --repo string           root directory of the repository (default: current dir)
   --rule string           path to JSON file with system review rules
+  -s, --shelveset string  TFVC shelveset name to review
   --timeout int           concurrent task timeout in minutes (default 10)
-  --to string             target ref to end diff at (e.g., 'feature-branch')
-  --tools string          path to JSON tools config file (default: embedded)`)
+  --to string             target ref to end diff at (e.g., 'feature-branch' or 'C12350')
+  --tools string          path to JSON tools config file (default: embedded)
+  --vcs string            version control system: auto, git, or tfvc (default "auto")`)
 }
 
 // --- config subcommand ---

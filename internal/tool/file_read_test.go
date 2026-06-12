@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/open-code-review/open-code-review/internal/vcs"
 )
 
 func writeTestFile(t *testing.T, dir, name, content string) {
@@ -146,7 +148,8 @@ func TestReadLines_GitShow_Window(t *testing.T) {
 	dir := setupTestRepo(t)
 	commit := getHeadCommit(t, dir)
 
-	fr := &FileReader{RepoDir: dir, Mode: ModeCommit, Ref: commit}
+	gitProv := vcs.NewGitProvider(0)
+	fr := &FileReader{RepoDir: dir, Mode: ModeCommit, Ref: commit, VCSProv: gitProv}
 	lines, total, err := fr.ReadLines(context.Background(), "hello.go", 1, 100)
 	if err != nil {
 		t.Fatal(err)

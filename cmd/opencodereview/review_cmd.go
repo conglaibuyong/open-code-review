@@ -12,11 +12,11 @@ import (
 	"github.com/open-code-review/open-code-review/internal/config/template"
 	"github.com/open-code-review/open-code-review/internal/config/toolsconfig"
 	"github.com/open-code-review/open-code-review/internal/diff"
-	"github.com/open-code-review/open-code-review/internal/gitcmd"
 	"github.com/open-code-review/open-code-review/internal/llm"
 	"github.com/open-code-review/open-code-review/internal/stdout"
 	"github.com/open-code-review/open-code-review/internal/telemetry"
 	"github.com/open-code-review/open-code-review/internal/tool"
+	"github.com/open-code-review/open-code-review/internal/vcs"
 )
 
 func runReview(args []string) error {
@@ -29,8 +29,22 @@ func runReview(args []string) error {
 		return nil
 	}
 
-	if err := requireGitRepo(opts.repoDir); err != nil {
+	// Detect or validate VCS backend
+	vcsBackend, err := resolveVCSBackend(opts)
+	if err != nil {
 		return err
+	}
+
+	// Create VCS provider
+	vcsProv, err := createVCSProvider(vcsBackend, opts)
+	if err != nil {
+		return err
+	}
+
+	// Validate repository
+	repoDir, err := vcsProv.ResolveRepoDir(opts.repoDir)
+	if err != nil {
+		return fmt.Errorf("resolve repo: %w", err)
 	}
 
 	tpl, err := template.LoadDefault()
@@ -44,13 +58,8 @@ func runReview(args []string) error {
 		return fmt.Errorf("invalid config: %w", err)
 	}
 
-	repoDir, err := resolveRepoDir(opts.repoDir)
-	if err != nil {
-		return fmt.Errorf("resolve repo: %w", err)
-	}
-
 	if opts.commit != "" && opts.background == "" {
-		if msg, err := getCommitMessage(repoDir, opts.commit); err == nil && msg != "" {
+		if msg, err := vcsProv.GetCommitMessage(repoDir, opts.commit); err == nil && msg != "" {
 			opts.background = msg
 		}
 	}
@@ -61,7 +70,7 @@ func runReview(args []string) error {
 	}
 
 	if opts.preview {
-		return runPreview(repoDir, opts, fileFilter)
+		return runPreview(repoDir, opts, fileFilter, vcsProv)
 	}
 
 	toolEntries, err := toolsconfig.Load(opts.toolConfigPath)
@@ -92,16 +101,18 @@ func runReview(args []string) error {
 	llmClient := llm.NewLLMClient(ep)
 	model := ep.Model
 
-	gitRunner := gitcmd.New(opts.maxGitProcs)
-
 	collector := tool.NewCommentCollector()
-	mode := tool.ParseReviewMode(opts.from, opts.to, opts.commit)
+	mode := tool.ParseReviewMode(opts.from, opts.to, opts.commit, opts.shelveset)
 	ref, _ := mode.RefValue(opts.to, opts.commit)
 	fileReader := &tool.FileReader{
 		RepoDir: repoDir,
 		Mode:    mode,
 		Ref:     ref,
-		Runner:  gitRunner,
+		VCSProv: vcsProv,
+	}
+	// Set Runner for backward compatibility with code_search.go (git grep)
+	if gitProv, ok := vcsProv.(*vcs.GitProvider); ok {
+		fileReader.Runner = gitProv.Runner()
 	}
 	tools := buildToolRegistry(collector, fileReader)
 
@@ -110,6 +121,7 @@ func runReview(args []string) error {
 		From:                  opts.from,
 		To:                    opts.to,
 		Commit:                opts.commit,
+		Shelveset:             opts.shelveset,
 		Template:              *tpl,
 		SystemRule:            resolver,
 		FileFilter:            fileFilter,
@@ -123,7 +135,7 @@ func runReview(args []string) error {
 		ConcurrentTaskTimeout: opts.perFileTimeout,
 		Model:                 model,
 		Background:            opts.background,
-		GitRunner:             gitRunner,
+		VCSProvider:           vcsProv,
 	})
 
 	// Silence progress output during execution; restore before Summary in agent mode.
@@ -184,47 +196,63 @@ func runReview(args []string) error {
 	return nil
 }
 
-func resolveRepoDir(input string) (string, error) {
-	if input == "" {
-		var err error
-		input, err = os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("get working directory: %w", err)
+// resolveVCSBackend determines which VCS backend to use based on the --vcs flag
+// and auto-detection.
+func resolveVCSBackend(opts reviewOptions) (vcs.Backend, error) {
+	switch opts.vcs {
+	case "git":
+		return vcs.Git, nil
+	case "tfvc":
+		return vcs.TFVC, nil
+	case "auto":
+		dir := opts.repoDir
+		if dir == "" {
+			dir, _ = os.Getwd()
 		}
+		backend, err := vcs.DetectBackend(dir)
+		if err != nil {
+			return "", fmt.Errorf("cannot detect VCS: %w\nUse --vcs git or --vcs tfvc to specify", err)
+		}
+		return backend, nil
+	default:
+		return "", fmt.Errorf("invalid --vcs value %q: must be 'auto', 'git', or 'tfvc'", opts.vcs)
 	}
-	absPath, err := filepath.Abs(input)
-	if err != nil {
-		return "", fmt.Errorf("resolve absolute path: %w", err)
-	}
-	out, err := runGitCmd(absPath, "rev-parse", "--git-dir")
-	if err != nil || len(out) == 0 {
-		return "", fmt.Errorf("%s is not a git repository", absPath)
-	}
-	return absPath, nil
 }
 
-// requireGitRepo validates that the given directory is part of a git repository.
-func requireGitRepo(dir string) error {
+// createVCSProvider creates the appropriate VCS provider for the given backend.
+func createVCSProvider(backend vcs.Backend, opts reviewOptions) (vcs.Provider, error) {
+	switch backend {
+	case vcs.Git:
+		return vcs.NewGitProvider(opts.maxGitProcs), nil
+	case vcs.TFVC:
+		return vcs.NewTFVCProvider(""), nil
+	default:
+		return nil, fmt.Errorf("unsupported VCS backend: %s", backend)
+	}
+}
+
+// requireVCSRepo validates that the given directory is a valid VCS repository.
+// Deprecated: Use vcsProvider.ResolveRepoDir instead.
+func requireVCSRepo(dir string, vcsProv vcs.Provider) error {
 	repoDir, err := filepath.Abs(dir)
 	if err != nil {
 		return fmt.Errorf("resolve path: %w", err)
 	}
-	out, err := runGitCmd(repoDir, "rev-parse", "--git-dir")
-	if err != nil || len(out) == 0 {
-		return fmt.Errorf("%s is not a git repository, code review requires a valid git repository", repoDir)
+	if !vcsProv.Detect(repoDir) {
+		return fmt.Errorf("%s is not a valid repository, code review requires a valid repository", repoDir)
 	}
 	return nil
 }
 
-func runPreview(repoDir string, opts reviewOptions, fileFilter *rules.FileFilter) error {
-	gitRunner := gitcmd.New(opts.maxGitProcs)
+func runPreview(repoDir string, opts reviewOptions, fileFilter *rules.FileFilter, vcsProv vcs.Provider) error {
 	ag := agent.New(agent.Args{
-		RepoDir:    repoDir,
-		From:       opts.from,
-		To:         opts.to,
-		Commit:     opts.commit,
-		FileFilter: fileFilter,
-		GitRunner:  gitRunner,
+		RepoDir:     repoDir,
+		From:        opts.from,
+		To:          opts.to,
+		Commit:      opts.commit,
+		Shelveset:   opts.shelveset,
+		FileFilter:  fileFilter,
+		VCSProvider: vcsProv,
 	})
 
 	preview, err := ag.Preview(context.Background())

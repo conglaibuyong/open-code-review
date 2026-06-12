@@ -22,6 +22,7 @@ import (
 	"github.com/open-code-review/open-code-review/internal/stdout"
 	"github.com/open-code-review/open-code-review/internal/telemetry"
 	"github.com/open-code-review/open-code-review/internal/tool"
+	"github.com/open-code-review/open-code-review/internal/vcs"
 )
 
 // planBlockPattern matches the optional "Review Plan" section in a MAIN_TASK
@@ -112,8 +113,15 @@ type Args struct {
 	// template phases (plan/memory_compression) don't specify one.
 	Model string
 
+	// Shelveset is a TFVC shelveset name to review (TFVC-specific).
+	Shelveset string
+
+	// VCSProvider is the version control system backend.
+	// When nil, a Git provider is created automatically.
+	VCSProvider vcs.Provider
+
 	// GitRunner limits the total number of concurrent git subprocesses.
-	// When nil, subprocesses are spawned without a global limit.
+	// Deprecated: Use VCSProvider instead. Kept for backward compatibility.
 	GitRunner *gitcmd.Runner
 
 	// Session is an optional session history instance for collecting conversation records.
@@ -234,13 +242,21 @@ func New(args Args) *Agent {
 	if args.CommentCollector == nil {
 		args.CommentCollector = tool.NewCommentCollector()
 	}
+	// Auto-create VCSProvider if not set
+	if args.VCSProvider == nil {
+		if args.GitRunner != nil {
+			args.VCSProvider = vcs.NewGitProviderWithRunner(args.GitRunner)
+		} else {
+			args.VCSProvider = vcs.NewGitProvider(0)
+		}
+	}
 	if args.Session == nil {
-		gitBranch := detectGitBranch(args.RepoDir)
+		branch := args.VCSProvider.GetCurrentBranch(args.RepoDir)
 		mode := args.ReviewMode
 		if mode == "" {
-			mode = reviewModeString(args.From, args.To, args.Commit)
+			mode = reviewModeString(args.From, args.To, args.Commit, args.Shelveset)
 		}
-		args.Session = session.New(args.RepoDir, gitBranch, args.Model, session.SessionOptions{
+		args.Session = session.New(args.RepoDir, branch, args.Model, session.SessionOptions{
 			ReviewMode: mode,
 			DiffFrom:   args.From,
 			DiffTo:     args.To,
@@ -368,12 +384,14 @@ func (a *Agent) loadDiffs(ctx context.Context) error {
 	var provider *diff.Provider
 
 	switch {
+	case a.args.Shelveset != "":
+		provider = diff.NewShelvesetProvider(a.args.RepoDir, a.args.Shelveset, a.args.VCSProvider)
 	case a.args.Commit != "":
-		provider = diff.NewCommitProvider(a.args.RepoDir, a.args.Commit, a.args.GitRunner)
+		provider = diff.NewCommitProvider(a.args.RepoDir, a.args.Commit, a.args.VCSProvider)
 	case a.args.From != "" && a.args.To != "":
-		provider = diff.NewProvider(a.args.RepoDir, a.args.From, a.args.To, a.args.GitRunner)
+		provider = diff.NewProvider(a.args.RepoDir, a.args.From, a.args.To, a.args.VCSProvider)
 	default:
-		provider = diff.NewWorkspaceProvider(a.args.RepoDir, a.args.GitRunner)
+		provider = diff.NewWorkspaceProvider(a.args.RepoDir, a.args.VCSProvider)
 	}
 
 	parsed, err := provider.GetDiff(ctx)
@@ -1467,7 +1485,10 @@ func buildMessageXML(msgs []llm.Message) string {
 	return sb.String()
 }
 
-func reviewModeString(from, to, commit string) string {
+func reviewModeString(from, to, commit, shelveset string) string {
+	if shelveset != "" {
+		return "shelveset"
+	}
 	if commit != "" {
 		return session.ReviewModeCommit
 	}
@@ -1478,6 +1499,7 @@ func reviewModeString(from, to, commit string) string {
 }
 
 // detectGitBranch returns the current git branch name for the given repo, or empty string on failure.
+// Deprecated: Use VCSProvider.GetCurrentBranch instead.
 func detectGitBranch(repoDir string) string {
 	cmd := exec.Command("git", "-C", repoDir, "rev-parse", "--abbrev-ref", "HEAD")
 	out, err := cmd.Output()

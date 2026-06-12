@@ -5,12 +5,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
-	"github.com/open-code-review/open-code-review/internal/gitcmd"
 	"github.com/open-code-review/open-code-review/internal/model"
+	"github.com/open-code-review/open-code-review/internal/vcs"
 )
 
 // DiffContextLines defines the number of context lines around each changed hunk.
@@ -22,6 +21,7 @@ var providerDirIgnoreDirs = []string{
 	".vscode/",
 	".svn/",
 	".git/",
+	"$tf/",
 	"vendor/",
 	"node_modules/",
 	"target/",
@@ -39,13 +39,14 @@ const (
 	ModeWorkspace Mode = iota // current workspace (staged + unstaged + untracked)
 	ModeCommit                // single commit vs its parent
 	ModeRange                 // merge-base(from,to)..to
+	ModeShelveset             // TFVC shelveset
 )
 
-// Provider retrieves and parse git diffs from a repository.
+// Provider retrieves and parses diffs from a repository using a VCS backend.
 type Provider struct {
 	repoDir string
 	mode    Mode
-	runner  *gitcmd.Runner
+	vcsProv vcs.Provider
 
 	// Range mode parameters
 	from, to string // from/to refs for range comparison
@@ -53,36 +54,49 @@ type Provider struct {
 	// Commit mode parameter
 	commit string // single commit hash/ref
 
-	mergeBase string // cached common ancestor for range mode
+	// Shelveset mode parameter (TFVC-specific)
+	shelveset string
+
+	mergeBase string // cached common ancestor for range mode (Git-specific)
 }
 
 // NewProvider creates a Provider for range mode: from..to (via merge-base).
-func NewProvider(repoDir, from, to string, runner *gitcmd.Runner) *Provider {
+func NewProvider(repoDir, from, to string, vcsProv vcs.Provider) *Provider {
 	return &Provider{
 		repoDir: repoDir,
 		mode:    ModeRange,
 		from:    from,
 		to:      to,
-		runner:  runner,
+		vcsProv: vcsProv,
 	}
 }
 
 // NewCommitProvider creates a Provider for commit mode: show changes introduced by a single commit.
-func NewCommitProvider(repoDir, commit string, runner *gitcmd.Runner) *Provider {
+func NewCommitProvider(repoDir, commit string, vcsProv vcs.Provider) *Provider {
 	return &Provider{
 		repoDir: repoDir,
 		mode:    ModeCommit,
 		commit:  commit,
-		runner:  runner,
+		vcsProv: vcsProv,
 	}
 }
 
 // NewWorkspaceProvider creates a Provider for workspace mode (current uncommitted changes).
-func NewWorkspaceProvider(repoDir string, runner *gitcmd.Runner) *Provider {
+func NewWorkspaceProvider(repoDir string, vcsProv vcs.Provider) *Provider {
 	return &Provider{
 		repoDir: repoDir,
 		mode:    ModeWorkspace,
-		runner:  runner,
+		vcsProv: vcsProv,
+	}
+}
+
+// NewShelvesetProvider creates a Provider for shelveset mode (TFVC-specific).
+func NewShelvesetProvider(repoDir, shelveset string, vcsProv vcs.Provider) *Provider {
+	return &Provider{
+		repoDir:   repoDir,
+		mode:      ModeShelveset,
+		shelveset: shelveset,
+		vcsProv:   vcsProv,
 	}
 }
 
@@ -96,7 +110,12 @@ func (p *Provider) IsCommitMode() bool {
 	return p.mode == ModeCommit
 }
 
-// MergeBase returns the computed merge-base commit hash for range mode.
+// IsShelvesetMode returns true when analyzing a shelveset.
+func (p *Provider) IsShelvesetMode() bool {
+	return p.mode == ModeShelveset
+}
+
+// MergeBase returns the computed merge-base commit hash for range mode (Git-specific).
 func (p *Provider) MergeBase(ctx context.Context) string {
 	if p.mode != ModeRange || p.mergeBase != "" {
 		return p.mergeBase
@@ -107,42 +126,19 @@ func (p *Provider) MergeBase(ctx context.Context) string {
 
 // GetDiff returns all changes as parsed model.Diff structs.
 func (p *Provider) GetDiff(ctx context.Context) ([]model.Diff, error) {
-	var combined strings.Builder
+	diffOpts := vcs.DiffOptions{
+		Mode:      p.toVCSMode(),
+		RepoDir:   p.repoDir,
+		From:      p.from,
+		To:        p.to,
+		Commit:    p.commit,
+		Shelveset: p.shelveset,
+		Context:   DiffContextLines,
+	}
 
-	switch p.mode {
-	case ModeRange:
-		base := p.MergeBase(ctx)
-		if base == "" {
-			return nil, fmt.Errorf("cannot find merge-base between %s and %s", p.from, p.to)
-		}
-		out, err := p.runGit(ctx, "diff", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--no-color", "-U"+fmt.Sprint(DiffContextLines), base, p.to, "--")
-		if err != nil {
-			return nil, fmt.Errorf("git diff failed: %w", err)
-		}
-		combined.WriteString(out)
-
-	case ModeCommit:
-		out, err := p.runGit(ctx, "show", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--no-color", "-U"+fmt.Sprint(DiffContextLines), p.commit)
-		if err != nil {
-			return nil, fmt.Errorf("git show failed: %w", err)
-		}
-		combined.WriteString(out)
-
-	case ModeWorkspace:
-		tracked, err := p.workspaceTrackedDiff(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("workspace tracked diff failed: %w", err)
-		}
-		combined.WriteString(tracked)
-
-		untracked, err := p.untrackedFileDiffs(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("untracked file diff failed: %w", err)
-		}
-		for _, ud := range untracked {
-			combined.WriteString(ud)
-			combined.WriteString("\n\n")
-		}
+	diffText, err := p.vcsProv.GetDiff(ctx, diffOpts)
+	if err != nil {
+		return nil, err
 	}
 
 	var ref string
@@ -153,21 +149,49 @@ func (p *Provider) GetDiff(ctx context.Context) ([]model.Diff, error) {
 		ref = p.commit
 	}
 
-	diffs, err := ParseDiffText(ctx, combined.String(), p.repoDir, ref, p.runner)
+	diffs, err := ParseDiffText(ctx, diffText, p.repoDir, ref, p.vcsProv)
 	if err != nil {
 		return nil, err
 	}
 	return p.filterDiffs(diffs), nil
 }
 
-// loadGitignorePatterns reads and parses .gitignore patterns from the repo root.
-func (p *Provider) loadGitignorePatterns() []string {
-	data, err := os.ReadFile(filepath.Join(p.repoDir, ".gitignore"))
+// toVCSMode converts the internal Mode to vcs.DiffMode.
+func (p *Provider) toVCSMode() vcs.DiffMode {
+	switch p.mode {
+	case ModeWorkspace:
+		return vcs.ModeWorkspace
+	case ModeCommit:
+		return vcs.ModeCommit
+	case ModeRange:
+		return vcs.ModeRange
+	case ModeShelveset:
+		return vcs.ModeShelveset
+	default:
+		return vcs.ModeWorkspace
+	}
+}
+
+// loadIgnorePatterns reads and parses ignore patterns from the VCS-specific ignore file.
+func (p *Provider) loadIgnorePatterns() []string {
+	ignoreFile := p.vcsProv.IgnoreFile()
+	data, err := os.ReadFile(filepath.Join(p.repoDir, ignoreFile))
 	if err != nil {
+		// Also try .gitignore as fallback for TFVC repos that may have both
+		if ignoreFile != ".gitignore" {
+			if data2, err2 := os.ReadFile(filepath.Join(p.repoDir, ".gitignore")); err2 == nil {
+				return parseIgnorePatterns(string(data2))
+			}
+		}
 		return nil
 	}
+	return parseIgnorePatterns(string(data))
+}
+
+// parseIgnorePatterns parses ignore file content into pattern lines.
+func parseIgnorePatterns(content string) []string {
 	var patterns []string
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -178,8 +202,8 @@ func (p *Provider) loadGitignorePatterns() []string {
 }
 
 // isPathExcluded returns true when the given relative file path should be skipped
-// based on hardcoded dir rules or .gitignore patterns.
-func (p *Provider) isPathExcluded(relPath string, gitignorePatterns []string) bool {
+// based on hardcoded dir rules or ignore patterns.
+func (p *Provider) isPathExcluded(relPath string, ignorePatterns []string) bool {
 	// Hardcoded directory prefix checks
 	for _, prefix := range providerDirIgnoreDirs {
 		dirPart := strings.TrimSuffix(prefix, "/")
@@ -188,17 +212,17 @@ func (p *Provider) isPathExcluded(relPath string, gitignorePatterns []string) bo
 		}
 	}
 
-	// .gitignore pattern matching
-	for _, pat := range gitignorePatterns {
-		if matchGitignorePattern(relPath, pat) {
+	// Ignore file pattern matching
+	for _, pat := range ignorePatterns {
+		if matchIgnorePattern(relPath, pat) {
 			return true
 		}
 	}
 	return false
 }
 
-// matchGitignorePattern checks if relPath matches a single .gitignore pattern.
-func matchGitignorePattern(relPath, pat string) bool {
+// matchIgnorePattern checks if relPath matches a single ignore pattern.
+func matchIgnorePattern(relPath, pat string) bool {
 	// Directory-only patterns (trailing /)
 	if strings.HasSuffix(pat, "/") {
 		dirName := strings.TrimSuffix(pat, "/")
@@ -240,7 +264,7 @@ func matchGitignorePattern(relPath, pat string) bool {
 
 // filterDiffs removes diffs whose file paths are excluded.
 func (p *Provider) filterDiffs(diffs []model.Diff) []model.Diff {
-	patterns := p.loadGitignorePatterns()
+	patterns := p.loadIgnorePatterns()
 	var result []model.Diff
 	for _, d := range diffs {
 		path := d.NewPath
@@ -256,93 +280,46 @@ func (p *Provider) filterDiffs(diffs []model.Diff) []model.Diff {
 
 // ---- Internal helpers ----
 
+// computeMergeBase computes the merge-base for Git range mode.
 func (p *Provider) computeMergeBase(ctx context.Context, from, to string) string {
-	out, err := p.runGit(ctx, "merge-base", from, to)
+	gitProv, ok := p.vcsProv.(*vcs.GitProvider)
+	if !ok {
+		return "" // merge-base is Git-specific
+	}
+	base, err := gitProv.MergeBase(ctx, p.repoDir, from, to)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(out)
+	return base
 }
 
-func (p *Provider) workspaceTrackedDiff(ctx context.Context) (string, error) {
-	out, err := p.runGit(ctx, "diff", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "HEAD", "--no-color", "-U"+fmt.Sprint(DiffContextLines), "--")
-	if err == nil && out != "" {
-		return out, nil
-	}
-	if ctx.Err() != nil {
-		return "", ctx.Err()
-	}
-	return p.runGit(ctx, "diff", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--staged", "--no-color", "-U"+fmt.Sprint(DiffContextLines), "--")
-}
-
-func (p *Provider) untrackedFileDiffs(ctx context.Context) ([]string, error) {
-	files, err := p.untrackedFilesList(ctx)
+// formatNewFileDiff constructs a unified diff for a newly added file.
+func formatNewFileDiff(relPath string, repoDir string) string {
+	fullPath := filepath.Join(repoDir, relPath)
+	content, err := os.ReadFile(fullPath)
 	if err != nil {
-		return nil, err
+		return ""
 	}
 
-	var results []string
-	for _, f := range files {
-		fullPath := filepath.Join(p.repoDir, f)
-		stat, serr := os.Stat(fullPath)
-		if serr != nil || stat.IsDir() {
-			continue
-		}
-		content, rerr := os.ReadFile(fullPath)
-		if rerr != nil {
-			continue
-		}
-
-		lineCount := bytes.Count(content, []byte{'\n'})
-		if len(content) > 0 && content[len(content)-1] != '\n' {
-			lineCount++
-		}
-
-		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", f, f))
-		sb.WriteString("--- /dev/null\n")
-		sb.WriteString(fmt.Sprintf("+++ b/%s\n", f))
-		sb.WriteString(fmt.Sprintf("@@ -0,0 +1,%d @@\n", lineCount))
-
-		lines := bytes.Split(content, []byte{'\n'})
-		if len(lines) > 0 && len(lines[len(lines)-1]) == 0 {
-			lines = lines[:len(lines)-1]
-		}
-		for _, line := range lines {
-			sb.WriteByte('+')
-			sb.Write(line)
-			sb.WriteByte('\n')
-		}
-		results = append(results, sb.String())
+	lineCount := bytes.Count(content, []byte{'\n'})
+	if len(content) > 0 && content[len(content)-1] != '\n' {
+		lineCount++
 	}
-	return results, nil
-}
 
-func (p *Provider) untrackedFilesList(ctx context.Context) ([]string, error) {
-	out, err := p.runGit(ctx, "ls-files", "--others", "--exclude-standard")
-	if err != nil || out == "" {
-		return nil, nil
-	}
-	patterns := p.loadGitignorePatterns()
-	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if !p.isPathExcluded(line, patterns) {
-			files = append(files, line)
-		}
-	}
-	return files, nil
-}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", relPath, relPath))
+	sb.WriteString("--- /dev/null\n")
+	sb.WriteString(fmt.Sprintf("+++ b/%s\n", relPath))
+	sb.WriteString(fmt.Sprintf("@@ -0,0 +1,%d @@\n", lineCount))
 
-func (p *Provider) runGit(ctx context.Context, args ...string) (string, error) {
-	if p.runner != nil {
-		return p.runner.Run(ctx, p.repoDir, args...)
+	lines := bytes.Split(content, []byte{'\n'})
+	if len(lines) > 0 && len(lines[len(lines)-1]) == 0 {
+		lines = lines[:len(lines)-1]
 	}
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = p.repoDir
-	out, err := cmd.CombinedOutput()
-	return string(out), err
+	for _, line := range lines {
+		sb.WriteByte('+')
+		sb.Write(line)
+		sb.WriteByte('\n')
+	}
+	return sb.String()
 }

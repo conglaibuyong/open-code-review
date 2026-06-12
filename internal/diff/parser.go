@@ -5,14 +5,13 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/open-code-review/open-code-review/internal/gitcmd"
 	"github.com/open-code-review/open-code-review/internal/model"
+	"github.com/open-code-review/open-code-review/internal/vcs"
 )
 
 var (
@@ -23,11 +22,9 @@ var (
 )
 
 // ParseDiffText splits the unified diff text into per-file Diff structs.
-// ref, if non-empty, is a git ref used to read new-file content via
-// git show instead of reading from the working tree.
-// runner, if non-nil, is used to execute git subprocesses through a
-// shared concurrency limiter.
-func ParseDiffText(ctx context.Context, diffText string, repoDir string, ref string, runner *gitcmd.Runner) ([]model.Diff, error) {
+// ref, if non-empty, is a VCS ref used to read new-file content.
+// vcsProv, if non-nil, is used to read file content at the given ref.
+func ParseDiffText(ctx context.Context, diffText string, repoDir string, ref string, vcsProv vcs.Provider) ([]model.Diff, error) {
 	lines := strings.Split(diffText, "\n")
 	var diffs []model.Diff
 	var current *model.Diff
@@ -41,7 +38,7 @@ func ParseDiffText(ctx context.Context, diffText string, repoDir string, ref str
 			// Flush previous diff
 			if current != nil {
 				current.Diff = strings.TrimSuffix(buf.String(), "\n")
-				finalizeDiff(ctx, current, repoDir, ref, runner)
+				finalizeDiff(ctx, current, repoDir, ref, vcsProv)
 				diffs = append(diffs, *current)
 				buf.Reset()
 			}
@@ -77,7 +74,7 @@ func ParseDiffText(ctx context.Context, diffText string, repoDir string, ref str
 	// Flush last diff
 	if current != nil {
 		current.Diff = strings.TrimSuffix(buf.String(), "\n")
-		finalizeDiff(ctx, current, repoDir, ref, runner)
+		finalizeDiff(ctx, current, repoDir, ref, vcsProv)
 		diffs = append(diffs, *current)
 	}
 
@@ -85,23 +82,14 @@ func ParseDiffText(ctx context.Context, diffText string, repoDir string, ref str
 }
 
 // finalizeDiff reads the new file content. When ref is non-empty it uses
-// git show to read the file at that ref; otherwise it reads from disk.
-func finalizeDiff(ctx context.Context, d *model.Diff, repoDir string, ref string, runner *gitcmd.Runner) {
+// the VCS provider to read the file at that ref; otherwise it reads from disk.
+func finalizeDiff(ctx context.Context, d *model.Diff, repoDir string, ref string, vcsProv vcs.Provider) {
 	if d.IsDeleted || d.NewPath == "/dev/null" {
 		d.NewPath = "/dev/null"
 		return
 	}
-	if ref != "" {
-		args := []string{"-c", "core.quotepath=false", "show", ref + ":" + d.NewPath}
-		var output []byte
-		var err error
-		if runner != nil {
-			output, err = runner.Output(ctx, repoDir, args...)
-		} else {
-			cmd := exec.CommandContext(ctx, "git", args...)
-			cmd.Dir = repoDir
-			output, err = cmd.Output()
-		}
+	if ref != "" && vcsProv != nil {
+		output, err := vcsProv.ReadFile(ctx, repoDir, d.NewPath, ref)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[ocr] WARNING: cannot read file %s at ref %s: %v\n",
 				d.NewPath, ref, err)

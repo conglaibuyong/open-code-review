@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/open-code-review/open-code-review/internal/gitcmd"
+	"github.com/open-code-review/open-code-review/internal/vcs"
 )
 
 // runGitTest runs a git command in dir and fails the test on error.
@@ -69,21 +69,14 @@ func initRepoWithChange(t *testing.T) string {
 // text, which the parser cannot read -> 0 diffs -> a silent "No files changed".
 // Passing --no-ext-diff (and --no-textconv) to every git diff/show call site
 // makes the provider immune to the user's diff configuration.
-//
-// RED (before fix): the workspace diff call sites omit --no-ext-diff, so the
-// garbage script's output is returned and len(diffs) == 0 -> this test FAILS.
-// GREEN (after fix): --no-ext-diff bypasses the env var, the unified diff is
-// produced and parsed, len(diffs) > 0 -> this test PASSES.
 func TestWorkspaceDiffSurvivesExternalDiffTool(t *testing.T) {
 	repo := initRepoWithChange(t)
 	garbage := writeGarbageExternalDiff(t)
 
-	// Activate the user-hostile external diff tool for this test process. The
-	// provider shells out to git, which inherits this environment.
 	t.Setenv("GIT_EXTERNAL_DIFF", garbage)
 
-	runner := gitcmd.New(0)
-	provider := NewWorkspaceProvider(repo, runner)
+	gitProv := vcs.NewGitProvider(0)
+	provider := NewWorkspaceProvider(repo, gitProv)
 
 	diffs, err := provider.GetDiff(context.Background())
 	if err != nil {
@@ -109,8 +102,8 @@ func TestCommitDiffSurvivesExternalDiffTool(t *testing.T) {
 	garbage := writeGarbageExternalDiff(t)
 	t.Setenv("GIT_EXTERNAL_DIFF", garbage)
 
-	runner := gitcmd.New(0)
-	provider := NewCommitProvider(repo, "HEAD", runner)
+	gitProv := vcs.NewGitProvider(0)
+	provider := NewCommitProvider(repo, "HEAD", gitProv)
 
 	diffs, err := provider.GetDiff(context.Background())
 	if err != nil {
@@ -137,9 +130,9 @@ func TestRangeDiffSurvivesExternalDiffTool(t *testing.T) {
 	garbage := writeGarbageExternalDiff(t)
 	t.Setenv("GIT_EXTERNAL_DIFF", garbage)
 
-	runner := gitcmd.New(0)
+	gitProv := vcs.NewGitProvider(0)
 	// Range: HEAD~1..HEAD -> the second commit's change.
-	provider := NewProvider(repo, "HEAD~1", "HEAD", runner)
+	provider := NewProvider(repo, "HEAD~1", "HEAD", gitProv)
 
 	diffs, err := provider.GetDiff(context.Background())
 	if err != nil {
